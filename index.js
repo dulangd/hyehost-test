@@ -7,7 +7,7 @@ const path = require('path');
 const net = require('net');
 const crypto = require('crypto');
 
-const VERSION = '1.3.0';
+const VERSION = '1.3.1';
 const PORT = Number(process.env.PORT || process.env.SERVER_PORT || 8080);
 const STATE_DIR = String(process.env.SERVICE_STATE_DIR || process.env.HYEHOST_STATE_DIR || path.join(os.homedir(), '.hyehost-node')).trim();
 const ID_FILE = path.join(STATE_DIR, 'identity.json');
@@ -50,17 +50,69 @@ async function obtainCore() {
   throw lastError || new Error('core unavailable');
 }
 
+function replaceRequired(source, before, after, label) {
+  if (!source.includes(before)) throw new Error(`core patch marker missing: ${label}`);
+  return source.replace(before, after);
+}
+
 function prepareCore(src) {
-  return src
-    .replace("const VERSION = '1.2.0';", "const VERSION = '1.3.0';")
-    .replace(
-      "let endpointConfirmed = !!(PUBLIC_OVERRIDE && endpoint);",
-      "let endpointConfirmed = !!(endpoint && (PUBLIC_OVERRIDE || endpoint.source === 'request'));"
-    )
-    .replace(
-      "console.log('[check] first external data session established');",
-      "console.log('[check] data path validated');"
-    );
+  let out = src;
+  out = replaceRequired(out, "const VERSION = '1.2.0';", "const VERSION = '1.3.1';", 'version');
+  out = replaceRequired(
+    out,
+    "let endpointConfirmed = !!(PUBLIC_OVERRIDE && endpoint);",
+    "let endpointConfirmed = !!(endpoint && (PUBLIC_OVERRIDE || endpoint.source === 'request'));",
+    'endpoint-confirmed'
+  );
+  out = replaceRequired(
+    out,
+    "console.log('[check] first external data session established');",
+    "console.log('[check] data path validated');",
+    'validation-log'
+  );
+  out = replaceRequired(
+    out,
+    "const GEO_RETRY_MS = Math.max(60_000, Number(process.env.GEO_RETRY_MS || 300000) || 300000);",
+    "const GEO_RETRY_MS = Math.max(300_000, Number(process.env.GEO_RETRY_MS || 1800000) || 1800000);",
+    'geo-period'
+  );
+  out = replaceRequired(
+    out,
+    "  geoBusy = (async () => {",
+    "  const previousGeoState = `${country.code}|${country.verified}|${country.egressIp || ''}`;\n  geoBusy = (async () => {",
+    'geo-state-before'
+  );
+  out = replaceRequired(
+    out,
+    "      console.log(`[geo] verified country=${country.code}`);",
+    "      if (!geoChecked) console.log(`[geo] verified country=${country.code}`);",
+    'geo-success-log'
+  );
+  out = replaceRequired(
+    out,
+    "      console.warn(`[geo] verification incomplete; country=${country.code}`);",
+    "      if (!geoChecked) console.warn(`[geo] verification incomplete; country=${country.code}`);",
+    'geo-incomplete-log'
+  );
+  out = replaceRequired(
+    out,
+    "    geoChecked = true;\n    if (controlEligible()) queueControl(250);",
+    "    geoChecked = true;\n    const currentGeoState = `${country.code}|${country.verified}|${country.egressIp || ''}`;\n    if (controlEligible() && currentGeoState !== previousGeoState) queueControl(250);",
+    'geo-sync-dedupe'
+  );
+  out = replaceRequired(
+    out,
+    "  const next = { protocol, host: u.hostname, port, source: 'request', learnedAt: new Date().toISOString() };\n  const changed = !endpoint || endpoint.protocol !== next.protocol || endpoint.host !== next.host || endpoint.port !== next.port;",
+    "  const next = { protocol, host: u.hostname, port, source: 'request', learnedAt: new Date().toISOString() };\n  if (endpoint && endpoint.host === next.host && endpoint.port !== 80 && next.port === 80 && !fport && !validPort(u.port)) { endpointConfirmed = true; return; }\n  const changed = !endpoint || endpoint.protocol !== next.protocol || endpoint.host !== next.host || endpoint.port !== next.port;",
+    'endpoint-downgrade-guard'
+  );
+  out = replaceRequired(
+    out,
+    "    controlSuccessAt = new Date().toISOString();\n    console.log(`[control] sync ok instance=${ID.instanceId} name=${displayName()} mode=${controlMode()}`);",
+    "    const firstControlSuccess = !controlSuccessAt;\n    controlSuccessAt = new Date().toISOString();\n    if (firstControlSuccess) console.log(`[control] connected instance=${ID.instanceId} name=${displayName()} mode=${controlMode()}`);",
+    'control-success-log'
+  );
+  return out;
 }
 
 function identity() {
